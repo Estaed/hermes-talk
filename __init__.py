@@ -188,7 +188,80 @@ def _register_talk_command(ctx) -> None:
     )
 
 
-def _talk_command(raw_args: str = "", invocation=None) -> str:
+async def _join_and_start_discord_talk(session: dict[str, str]) -> str:
+    """Join the caller's Discord channel, then start Talk on that connection."""
+    try:
+        user_id = str(int(session.get("user_id", "")))
+        guild_id = str(int(session.get("scope_id", "")))
+    except (TypeError, ValueError):
+        return "I couldn't identify your Discord user and server for voice join."
+    if int(user_id) not in talk_config.discord_operator_user_ids():
+        return "Only the configured Talk operator can start a voice session."
+    chat_id = (session.get("chat_id") or "").strip()
+    if not chat_id:
+        return "Run `/talk join` from a Discord server text channel."
+
+    try:
+        from types import SimpleNamespace
+        from gateway.config import Platform
+        from gateway.platforms.event import MessageEvent
+        from gateway.session import SessionSource
+        from gateway.run import _gateway_runner_ref
+
+        runner = _gateway_runner_ref() if callable(_gateway_runner_ref) else None
+        if runner is None:
+            return "The Hermes Discord gateway isn't running in this process."
+        source = SessionSource(
+            platform=Platform.DISCORD, chat_id=chat_id,
+            chat_type=session.get("chat_type") or "channel",
+            user_id=user_id,
+            user_name=session.get("user_name") or user_id,
+            scope_id=guild_id,
+            profile=session.get("profile") or None,
+        )
+        event = MessageEvent(
+            text="/voice join", user_id=user_id,
+            user_name=session.get("user_name") or user_id,
+            source=source, raw_message=SimpleNamespace(guild_id=int(guild_id)),
+        )
+        adapter = runner._delivery_adapter_for(source)
+        if adapter is None or not hasattr(adapter, "get_user_voice_channel"):
+            return "The Hermes Discord voice adapter isn't available."
+        voice_channel = await adapter.get_user_voice_channel(int(guild_id), user_id)
+        if voice_channel is None:
+            return "Join a Discord voice channel first, then run `/talk join`."
+
+        clients = getattr(adapter, "_voice_clients", {})
+        existing = clients.get(int(guild_id)) if isinstance(clients, dict) else None
+        connected = existing is not None
+        if connected and callable(getattr(existing, "is_connected", None)):
+            connected = existing.is_connected()
+        if connected:
+            current_channel = getattr(existing, "channel", None)
+            if current_channel is None:
+                return "I can't verify my current voice channel; use `/voice leave` first."
+            if str(getattr(current_channel, "id", "")) != str(voice_channel.id):
+                current_name = getattr(current_channel, "name", "another channel")
+                return (
+                    f"I'm already in **{current_name}**. Use `/voice leave` there, "
+                    "then run `/talk join` again."
+                )
+            joined_message = f"Already in **{voice_channel.name}**."
+        else:
+            joined_message = await runner._handle_voice_channel_join(event)
+            if not joined_message.startswith("Joined voice channel"):
+                return joined_message
+    except Exception as exc:  # noqa: BLE001 - turn host drift into a speakable refusal
+        logging.getLogger(__name__).warning(
+            "Could not join Discord voice before Talk: %s", type(exc).__name__
+        )
+        return f"I couldn't join your Discord voice channel ({type(exc).__name__})."
+
+    response = talk_discord.start_session(guild_id=int(guild_id))
+    return f"{joined_message}\n{response}"
+
+
+def _talk_command(raw_args: str = "", invocation=None, *, _session_context=None) -> str:
     """``/talk`` — start a voice session from inside a Hermes session.
 
     Two rooms, one command. Outside an event loop (a terminal session) the
@@ -206,8 +279,22 @@ def _talk_command(raw_args: str = "", invocation=None) -> str:
         from gateway.session_context import get_session_env
 
         if get_session_env("HERMES_SESSION_PLATFORM") == "discord":
+            session = {
+                "user_id": get_session_env("HERMES_SESSION_USER_ID"),
+                "user_name": get_session_env("HERMES_SESSION_USER_NAME"),
+                "scope_id": get_session_env("HERMES_SESSION_SCOPE_ID"),
+                "chat_id": get_session_env("HERMES_SESSION_CHAT_ID"),
+                "chat_type": get_session_env("HERMES_SESSION_CHAT_TYPE"),
+                "profile": get_session_env("HERMES_SESSION_PROFILE"),
+            }
+
             async def resume_on_gateway_loop():
-                return _talk_command(raw_args, invocation)
+                result = _talk_command(
+                    raw_args, invocation, _session_context=session
+                )
+                if inspect.isawaitable(result):
+                    return await result
+                return result
 
             return resume_on_gateway_loop()
         if sub in {"join", "core join", "pause", "resume", "leave", "status"}:
@@ -261,6 +348,8 @@ def _talk_command(raw_args: str = "", invocation=None) -> str:
             return f"Canonical core voice was refused by the host ({type(exc).__name__})."
         return talk_discord.start_core_session(factory)
     if sub in {"", "join"}:
+        if _session_context is not None:
+            return _join_and_start_discord_talk(_session_context)
         capture = getattr(invocation, "capture_realtime_execution_attachment", None)
         if callable(capture):
             try:
