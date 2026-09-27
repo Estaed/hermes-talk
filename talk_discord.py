@@ -1545,7 +1545,7 @@ def session_status() -> str:
         )
     return (
         f"Limited legacy provider-owned voice is live on server {guild_id}. "
-        "Use `/talk core join` for full canonical Hermes parity; say `talk leave` to stop."
+        "This session has no Hermes/TarikOS agent tools; say `talk leave` to stop."
         f"{paused}"
     )
 
