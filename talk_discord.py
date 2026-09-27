@@ -1544,8 +1544,8 @@ def session_status() -> str:
             f"{guild_id}. Say `talk leave` to stop.{paused}"
         )
     return (
-        f"Limited legacy provider-owned voice is live on server {guild_id}. "
-        "This session has no Hermes/TarikOS agent tools; say `talk leave` to stop."
+        f"Provider-owned Realtime voice with Talk tools is live on server {guild_id}. "
+        "Say `talk leave` to stop."
         f"{paused}"
     )
 
