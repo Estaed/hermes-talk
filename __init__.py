@@ -203,6 +203,13 @@ def _talk_command(raw_args: str = "", invocation=None) -> str:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
+        from gateway.session_context import get_session_env
+
+        if get_session_env("HERMES_SESSION_PLATFORM") == "discord":
+            async def resume_on_gateway_loop():
+                return _talk_command(raw_args, invocation)
+
+            return resume_on_gateway_loop()
         if sub in {"join", "core join", "pause", "resume", "leave", "status"}:
             return (
                 "Those are for the gateway's Discord voice channel. Here in a "
