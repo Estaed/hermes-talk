@@ -59,6 +59,9 @@ VOICE_PREAMBLE = (
     "depth. Everything you say is read aloud, so no markdown, no bullet "
     "lists, no emoji, no code blocks, and no spelling out long file paths or "
     "URLs. If you do not know something, say so plainly. "
+    "Reply in the language of the operator's latest utterance. When they "
+    "speak Turkish, reply in Turkish even if a tool result is in English. "
+    "Switch languages when the operator switches. "
     + ANTI_GUESS_RULE
     + "Use only the function tools explicitly listed for this session. After a tool result, answer "
     "in one to three spoken sentences; never read raw output verbatim. "
@@ -150,8 +153,9 @@ LANE_LINES: dict[str, str] = {
         "operator's own machine — Ctrl+C in that terminal ends the call."
     ),
     "discord": (
-        "You are live in a Discord voice channel — `/talk leave` or the "
-        "operator leaving the channel ends the call."
+        "You are live in a Discord voice channel. If the authorized operator "
+        "says you may leave, call leave_voice_call. They can also use "
+        "`/talk leave` or leave the channel themselves."
     ),
     "dashboard": (
         "You are live in the Hermes dashboard browser tab — the hang-up "

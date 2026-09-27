@@ -415,6 +415,19 @@ _TOOL_PAUSE_VOICE_INPUT: dict = {
 }
 
 
+_TOOL_LEAVE_VOICE_CALL: dict = {
+    "type": "function",
+    "name": "leave_voice_call",
+    "description": (
+        "Leave the current Discord voice channel and end the Realtime call "
+        "when the authorized operator clearly says you may leave, asks you "
+        "to hang up, or says 'çıkabilirsin'. Do not use this for a pause or "
+        "a background task. The call closes shortly after this tool result."
+    ),
+    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+}
+
+
 class TalkToolError(Exception):
     """Unknown tool name or otherwise malformed tool call."""
 
@@ -437,7 +450,7 @@ def plugin_version() -> str:
         return "unknown"
 
 
-def default_talk_tools(*, pausable: bool = False) -> list[dict]:
+def default_talk_tools(*, pausable: bool = False, discord: bool = False) -> list[dict]:
     """The tool set advertised to a new Talk session (fresh copies per call).
 
     The base set is unconditional. ``search_vault`` is CONDITIONAL: it is
@@ -467,6 +480,8 @@ def default_talk_tools(*, pausable: bool = False) -> list[dict]:
     ]
     if pausable:
         tools.append(_TOOL_PAUSE_VOICE_INPUT)
+    if discord:
+        tools.append(_TOOL_LEAVE_VOICE_CALL)
     try:
         if talk_vault.available():
             tools.insert(1, _TOOL_SEARCH_VAULT)
@@ -691,6 +706,15 @@ PAUSE_RECEIPTS: dict[str, str] = {
 _FALSE_WORDS = frozenset({"false", "no", "0", "off", "resume"})
 
 
+def _handle_leave_voice_call(arguments: dict) -> str:
+    del arguments
+    try:
+        from . import talk_discord
+    except ImportError:  # pragma: no cover - flat-module fallback
+        import talk_discord
+    return talk_discord.request_spoken_leave()
+
+
 def _handle_pause_voice_input(arguments: dict) -> str:
     raw = arguments.get("paused")
     if isinstance(raw, str):
@@ -880,6 +904,7 @@ _HANDLERS = {
     "talk_status": _handle_talk_status,
     "talk_capabilities": _handle_talk_capabilities,
     "pause_voice_input": _handle_pause_voice_input,
+    "leave_voice_call": _handle_leave_voice_call,
 }
 
 

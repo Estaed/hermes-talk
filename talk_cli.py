@@ -1587,7 +1587,9 @@ async def run_talk_session(
         tools = (
             host_execution_attachment.tool_definitions()
             if host_execution_attachment is not None
-            else talk_tools.default_talk_tools(pausable=resume_control is not None)
+            else talk_tools.default_talk_tools(
+                pausable=resume_control is not None, discord=lane == "discord"
+            )
         )
     except Exception as exc:  # noqa: BLE001 - host attachment startup boundary
         print(f"talk: host tool setup failed: {type(exc).__name__}", file=sys.stderr)
