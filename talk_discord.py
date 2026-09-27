@@ -1413,6 +1413,7 @@ __all__ = [
     "reset_for_tests",
     "resolve_voice_bridge",
     "resume_session",
+    "leave_voice_channel",
     "request_spoken_leave",
     "session_status",
     "session_to_discord",
@@ -1939,6 +1940,7 @@ def start_session(
                     "provider-host-tools" if host_execution_attachment is not None else "legacy"
                 ),
                 "generation": generation,
+                "loop": loop,
                 "spoken_leave_requested": False,
             }
         )
@@ -1960,51 +1962,74 @@ def start_session(
     )
 
 
+SPOKEN_LEAVE_DELAY_S = 2.5
+
+
+async def leave_voice_channel(guild_id: int | None = None) -> str:
+    """End Realtime and disconnect this bot from its Discord voice channel."""
+
+    with _SESSION_LOCK:
+        active_guild = _SESSION.get("guild_id")
+    if guild_id is None:
+        guild_id = active_guild
+    try:
+        bridge = resolve_voice_bridge(guild_id)
+    except TalkDiscordError as exc:
+        stop_session()
+        return str(exc)
+
+    stop_session()
+    adapter = bridge["adapter"]
+    resolved_guild = bridge["guild_id"]
+    chat_id = getattr(adapter, "_voice_text_channels", {}).get(resolved_guild)
+    try:
+        await adapter.leave_voice_channel(resolved_guild)
+    except Exception as exc:  # noqa: BLE001 — report disconnect failure honestly
+        _log.warning("Discord voice leave failed (%s)", _safe_exception_name(exc))
+        return "The Realtime call stopped, but Discord could not disconnect the voice channel."
+    callback = getattr(adapter, "_on_voice_disconnect", None)
+    if chat_id is not None and callable(callback):
+        try:
+            callback(str(chat_id))
+        except Exception as exc:  # noqa: BLE001 — the bot has already disconnected
+            _log.warning("Discord voice cleanup callback failed (%s)", _safe_exception_name(exc))
+    return "Left the Discord voice channel and ended the Realtime call."
+
+
 def request_spoken_leave() -> str:
-    """Schedule a complete Discord departure after returning the tool receipt."""
+    """Queue Discord departure on the captured gateway loop from a tool worker."""
 
     with _SESSION_LOCK:
         task = _SESSION.get("task")
         guild_id = _SESSION.get("guild_id")
         generation = _SESSION.get("generation")
+        loop = _SESSION.get("loop")
         if task is None or task.done() or guild_id is None:
             return "There is no live Discord voice call to leave."
         if _SESSION.get("spoken_leave_requested"):
             return "I'm already leaving the voice channel."
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return "I couldn't schedule the departure from this voice session."
+        if loop is None or loop.is_closed():
+            return "The Discord gateway loop is unavailable, so I couldn't leave."
         _SESSION["spoken_leave_requested"] = True
 
     async def depart() -> None:
-        # Return the function result to Realtime before cancelling its session.
-        await asyncio.sleep(1.5)
+        # Let the spoken acknowledgement reach Discord before closing its audio stream.
+        await asyncio.sleep(SPOKEN_LEAVE_DELAY_S)
         with _SESSION_LOCK:
             if (_SESSION.get("task") is not task
                     or _SESSION.get("generation") != generation):
                 return
-        try:
-            bridge = resolve_voice_bridge(guild_id)
-            adapter = bridge["adapter"]
-            chat_id = getattr(adapter, "_voice_text_channels", {}).get(guild_id)
-        except TalkDiscordError:
-            adapter = None
-            chat_id = None
-        stop_session()
-        if adapter is not None:
-            try:
-                await adapter.leave_voice_channel(guild_id)
-            except Exception as exc:
-                _log.warning("spoken Discord leave failed (%s)", _safe_exception_name(exc))
-            else:
-                callback = getattr(adapter, "_on_voice_disconnect", None)
-                if chat_id is not None and callable(callback):
-                    callback(str(chat_id))
+        result = await leave_voice_channel(guild_id)
+        _log.info("spoken Discord leave completed (%s)", result)
 
-    departure = loop.create_task(depart())
-    _NOTIFICATION_TASKS.add(departure)
-    departure.add_done_callback(_NOTIFICATION_TASKS.discard)
+    try:
+        asyncio.run_coroutine_threadsafe(depart(), loop)
+    except RuntimeError as exc:
+        with _SESSION_LOCK:
+            if _SESSION.get("task") is task and _SESSION.get("generation") == generation:
+                _SESSION["spoken_leave_requested"] = False
+        _log.warning("could not queue spoken Discord leave (%s)", _safe_exception_name(exc))
+        return "The Discord gateway couldn't queue the voice channel departure."
     return "I'm leaving the Discord voice channel now."
 
 

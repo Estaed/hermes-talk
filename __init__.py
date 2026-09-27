@@ -327,7 +327,12 @@ def _talk_command(raw_args: str = "", invocation=None, *, _session_context=None)
         return _canonical_discord_command(raw, invocation)
 
     if sub in {"leave", "stop", "hang up"}:
-        return talk_discord.stop_session()
+        guild_id = (_session_context or {}).get("scope_id")
+        try:
+            guild_id = int(guild_id) if guild_id is not None else None
+        except (TypeError, ValueError):
+            guild_id = None
+        return talk_discord.leave_voice_channel(guild_id)
     if sub == "status":
         return talk_discord.session_status()
     # The room's microphone control (hermes-talk#100): text, because a paused
@@ -436,8 +441,9 @@ async def _canonical_discord_control(operation, arguments, identifiers, expected
                 if (talk_discord._SESSION.get("task") is not running
                         or talk_discord._SESSION.get("generation") != generation):
                     raise ValueError("Voice session changed during leave")
-            # No await between the ownership fence and synchronous cancellation.
-            return talk_discord.stop_session()
+            # Enter the host helper immediately after the ownership fence; it stops
+            # Realtime before awaiting the actual Discord voice disconnect.
+            return await talk_discord.leave_voice_channel()
         aliases = {"mute": "pause", "unmute": "resume", "status": "state"}
         operation = aliases.get(operation, operation)
         if operation == "say":
