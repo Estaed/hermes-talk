@@ -79,6 +79,15 @@ MAX_OUTPUT_FRAMES = 250  # 5 s of queued reply
 _SESSION_BYTES_PER_SECOND = 24_000 * 2
 
 
+def _as_user_id(raw: Any) -> int | None:
+    """A Discord user id from the host's SSRC map (int or digit string)."""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 @dataclass(frozen=True)
 class InputAudioPacket:
     """One speaker snapshot attached to the exact PCM decoded with it."""
@@ -945,7 +954,15 @@ class DiscordAudio:
                 self._touch_host_timer()
             with self._lock:
                 paused = self._input_paused
+            # Only the operators' voices reach the session (TarikOS fork): the
+            # host's allowed-users gate runs on finished utterances, after this
+            # drain, so without this a busy channel feeds every speaker to the
+            # model. No operator configured keeps upstream behaviour.
+            operators = talk_config.discord_operator_user_ids()
             for ssrc, raw_user_id, chunk in chunks:
+                if operators and _as_user_id(raw_user_id) not in operators:
+                    self._capture_remainder.pop(ssrc, None)
+                    continue
                 if paused:
                     # Paused (hermes-talk#100): the host's buffers were still
                     # taken — they must not grow — and its inactivity timer
